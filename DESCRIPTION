@@ -1,0 +1,34 @@
+Package: tauFisher
+Title: Circadian time prediction from genomic data
+Version: 1.0.0
+Authors@R: 
+    c(person(given = "Michelle",
+             family = "N. Ngo",
+             role = c("aut", "cre"),
+             email = "ngomn@uci.edu",
+             comment = c(ORCID = "0000-0002-7768-1962")),
+      person(given = "Junyan",
+             family = "Duan",
+             role = "aut",
+             email = "jduan6@uci.edu",
+             comment = c(ORCID = "0000-0003-2112-2704"))
+      )
+Description: Pipeline to predict the circadian time of a genomic data sample. 
+License: GPL-3 | file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.1.2
+Imports:
+    MetaCycle,
+    utils,
+    scales,
+    dplyr,
+    stringr,
+    stats,
+    nnet,
+    magrittr,
+    fda
+Suggests: 
+    rmarkdown,
+    knitr
+VignetteBuilder: knitr

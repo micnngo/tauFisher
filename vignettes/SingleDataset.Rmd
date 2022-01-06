@@ -1,0 +1,186 @@
+---
+title: "Training and predicting on a single data set."
+author: "Michelle N. Ngo"
+date: 'Last compiled: `r format(Sys.Date(), "%B %d, %Y")`'
+header-includes:
+    - \usepackage {hyperref}
+    - \hypersetup {colorlinks = true, linkcolor = purple, urlcolor = pink}
+geometry: "left=1cm,right=1cm,top=1cm,bottom=1cm"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Training and predicting on a single data set.}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include=FALSE, echo=FALSE}
+library(knitr)
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Set-up
+
+Load the package.
+
+```{r setup}
+library(tauFisher)
+library(dplyr)
+set.seed(123)
+```
+
+# Import data
+
+For this tutorial, we will predict the circadian time of suprachiasmatic nucleus (SCN) transcriptomic samples from C57BL/6J mice. These mice were fed normal chow through an entire circadian cycle (24 hours) and samples were collected every four hours. A total of six time points with three replicates each (18 samples) were sequenced on the Illumina HiSeq 4000. 
+
+
+For more details, see [Tognini P *et al.* (2020)](https://doi.org/10.1073/pnas.2016589117). 
+The data set can be downloaded from the GEO database: [accession number GSE157077](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE157077).
+
+
+`tauFisher` requires:
+
+  1. A matrix of gene expression data with rows as genes and columns as samples.  
+  2. A vector of the circadian time for each sample. 
+
+```{r load_data}
+datafile <- system.file("extdata", "GSE157077_mouse_scn_control.tsv", 
+                    package = "tauFisher", mustWork = TRUE)
+data <- utils::read.delim(file = datafile, stringsAsFactors = FALSE)
+print(dim(data))
+print(data[1:5, 1:5])
+```
+
+# Pre-process data 
+
+All genes in the data matrix should be unique; if they are not, we will take their average expression. 
+
+```{r preprocess}
+# Take the average expression if there are non-unique genes
+df <- data[stats::complete.cases(data[,-1]), ] %>%
+  dplyr::mutate(ID = toupper(ID)) %>%
+  dplyr::group_by(ID) %>%
+  dplyr::summarise_all(mean)  %>%
+  as.data.frame()
+
+# Set the rownames to be the genes and remove the ID column 
+rownames(df) <- df$ID
+df <- df[,-1]
+```
+
+For this data set, the column names are the sample times and replicate indicator. 
+We will parse the column names to obtain a vector of time points. 
+
+```{r preprocess_time}
+time <- as.numeric(vapply(stringr::str_split(colnames(df), "_"),
+                          '[', 2, FUN.VALUE = character(1)) )
+replicate <- as.numeric(vapply(stringr::str_split(colnames(df), "_"),
+                          '[', 4, FUN.VALUE = character(1)) )
+```
+
+
+# `tauFisher`
+
+We will train `tauFisher` on the first two replicates and test on the third. 
+
+```{r split_train_test}
+# Set training index
+train_idx <- which(replicate != 3)
+
+# Subset train data
+train_df <- df[, train_idx]
+train_time <- time[train_idx]
+
+# Adjust time - each replicate is now the next 'period' so there's 2 sets
+time_adj <- train_time + 24*(as.numeric(replicate[replicate != 3]) - 1)
+
+train_adj = train_df
+colnames(train_adj) <- time_adj
+train_adj <- train_adj[, order(as.numeric(colnames(train_adj)))]
+time_adj <- time_adj[order(as.numeric(time_adj))]
+
+# Subset test data
+test_df <- df[, -train_idx] 
+test_time <- time[-train_idx]
+```
+
+
+## Find the periodic genes 
+
+Since we are testing on the third replicates, there are no missing time points. 
+
+
+Note that if there are missing time points, `JTK_Cycle` requires the data set to have a column of `NA`s for each missing point. 
+The columns are also assumed to be in order of time, for example: `CT0_REP1, CT0_REP2, CT4_REP1, CT4_REP2, ... `.
+
+
+For more details, please see the documentation for the `meta2d` function in `MetaCycle` or the `JTK_Cycle` package. 
+
+
+We will use both `Lomb-Scargle` and `JTK_Cycle` to find the periodic genes.
+`meta2d` will produce a text file (location and name given by parameter `out_file`) and a folder (location and name given by parameter `out_dir`) with the results. 
+
+```{r metacycle, eval=FALSE}
+run_metacycle(df=train_adj, 
+              timepoints=time_adj, 
+              out_file="../inst/extdata/GSE157077_train_adj.txt", 
+              out_dir="../inst/extdata/GSE157077_adj_meta2d", 
+              method=c("JTK", "LS") )
+```
+
+```{r periodic_genes}
+# Don't set a threshold for the p-value
+meta2d_file = "../inst/extdata/GSE157077_adj_meta2d/meta2d_GSE157077_train_adj.txt"
+genes = find_periodic_genes(input_file=meta2d_file,
+                            test_genes=rownames(test_df),
+                            per_method=c("LS", "JTK"),
+                            thres=1.01)
+
+print(genes)
+```
+
+
+## Train `tauFisher` 
+
+Since `Lomb-Scargle` did not produce any significant periodic genes at the 0.05 level, we will proceed with the periodic genes identified by `JTK_Cycle`.
+
+```{r train}
+trained_JTK <- train_tauFisher(periodic_genes=genes$JTK,
+                               train_df=train_adj,
+                               train_time=time_adj,
+                               nrep=2,
+                               numbasis=5)
+```
+
+The trained model will output a list with three items:
+
+1. The genes used for circadian time prediction. 
+
+    ```{r}
+    trained_JTK$Genes
+    ```
+
+2. The PCA embedding. 
+3. The trained model.
+
+## Predict circadian time 
+
+```{r test}
+result_JTK <- test_tauFisher(chosen_genes=trained_JTK$Genes,
+                             test_df=test_df,
+                             test_time=test_time,
+                             pca_embedding=trained_JTK$PCA_embedding,
+                             trained_model=trained_JTK$Model)
+```
+
+
+## Evalulate predictions
+
+The prediction is labeled correct if the predicted time is within 2 hours of the true time. 
+
+```{r evaluate}
+calc_error(result_JTK$truth, result_JTK$predicted)
+```
+
