@@ -68,7 +68,11 @@ And if you prefer executing each step of tauFisher instead of executing two func
 
 If you use tauFisher, please cite as:  
 
+Paper:
 
+
+Package:
+[![DOI](https://zenodo.org/badge/423253625.svg)](https://zenodo.org/doi/10.5281/zenodo.10780811)
 
 ## License
 
